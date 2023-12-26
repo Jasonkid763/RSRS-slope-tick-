@@ -1,0 +1,237 @@
+RSRS标准分策略部分参考网址：https://www.zhihu.com/question/48614524/answer/3333804487?utm_psn=1722637014493503488，提取数据，计算斜率BETA，最后计算标准分。
+Slope策略部分参考网址：https://blog.csdn.net/weixin_59313523/article/details/134432961，注意是斜率法的部分，且该python代码中的长期均线为WMA30,短期均线为SMA3.
+其他部分为多空信号的箭头和三个周期级别的标示，触发阈值TICK点的粗线标示。
+可编译主体部分代码如下，未完成部分为1.厘清RSRS标准分策略部分的代码与参考网址的PYTHON算法是否一致，机器人有没有误会；2.厘清Slope策略部分机器人代码是否与参考PYTHON代码一样，机器人是否理解；3.机器人给的其他代码是否能做出清楚的信号、策略标示
+
+#property strict
+
+// 定义 PeriodToString 函数
+string PeriodToString(int period)
+{
+    string result = "";
+
+    switch (period)
+    {
+        case PERIOD_M1: result = "M1"; break;
+        case PERIOD_M5: result = "M5"; break;
+        case PERIOD_M15: result = "M15"; break;
+        case PERIOD_M30: result = "M30"; break;
+        case PERIOD_H1: result = "H1"; break;
+        case PERIOD_H4: result = "H4"; break;
+        case PERIOD_D1: result = "D1"; break;
+        case PERIOD_W1: result = "W1"; break;
+        case PERIOD_MN1: result = "MN1"; break;
+        default: result = IntegerToString(period); break;
+    }
+
+    return result;
+}
+
+// RSRS Strategy Parameters
+#define RSRS_N 18
+#define RSRS_M 600
+#define RSRS_BUY_THRESHOLD 0.7
+#define RSRS_SELL_THRESHOLD -0.7
+
+// Slope Strategy Parameters
+#define SLOPE_FAST_MA_PERIOD 3
+#define SLOPE_SLOW_MA_PERIOD 30
+
+// Arrow Offset from the High/Low
+#define ARROW_OFFSET_FACTOR 1.5
+
+// Line Properties
+#define LINE_COLOR clrGray
+#define LINE_WIDTH 3
+
+// Global variables to store the line handle
+int lineHandle = 0;
+
+//+------------------------------------------------------------------+
+//| Calculate beta using rolling linear regression                  |
+//+------------------------------------------------------------------+
+double calculate_beta(const double &x[], const double &y[], int size)
+{
+    double sumX = 0.0, sumY = 0.0, sumXY = 0.0, sumX2 = 0.0;
+
+    for (int i = 0; i < size; i++)
+    {
+        sumX += x[i];
+        sumY += y[i];
+        sumXY += x[i] * y[i];
+        sumX2 += x[i] * x[i];
+    }
+
+    double beta = (size * sumXY - sumX * sumY) / (size * sumX2 - sumX * sumX);
+    return beta;
+}
+
+//+------------------------------------------------------------------+
+//| RSRS Strategy                                                   |
+//+------------------------------------------------------------------+
+void RSRS_Strategy()
+{
+    int dataSize = MathMin(iBars(_Symbol, _Period), RSRS_M);
+    int window = RSRS_N; // Number of data points for linear regression
+
+    double beta[];
+    ArraySetAsSeries(beta, true);
+
+    for (int i = window; i < dataSize; i++)
+    {
+        double x[];
+        double y[];
+        ArraySetAsSeries(x, true);
+        ArraySetAsSeries(y, true);
+
+        // Fill x and y arrays with historical low and high prices
+        for (int j = i - window; j <= i; j++)
+        {
+            x[j - (i - window)] = iLow(_Symbol, _Period, j);
+            y[j - (i - window)] = iHigh(_Symbol, _Period, j);
+        }
+
+        // Calculate beta using rolling linear regression
+        double beta_val = calculate_beta(x, y, window);
+        beta[i] = beta_val;
+    }
+
+    // Calculate standard score
+    double std_score[];
+    ArraySetAsSeries(std_score, true);
+
+    for (int i = dataSize - 1; i >= window; i--)
+    {
+        double sum = 0;
+        for (int j = 0; j < window; j++)
+            sum += MathPow(beta[i - j] - iMA(NULL, 0, 20, 0, MODE_SMA, PRICE_CLOSE, i - j), 2);
+        double std_dev = MathSqrt(sum / (window - 1));
+        std_score[i] = (beta[i] - iMA(NULL, 0, 20, 0, MODE_SMA, PRICE_CLOSE, i)) / std_dev;
+    }
+
+    // Display arrows and labels for RSRS signals
+    for (int i = dataSize - 1; i >= window; i--)
+    {
+        double std_score_val = std_score[i];
+
+        if (std_score_val > RSRS_BUY_THRESHOLD)
+        {
+            // RSRS std_score greater than buy threshold, show red arrow
+            ShowArrow(i, "H1级", clrRed, SYMBOL_ARROWUP);
+            // Draw a thick line at the triggering tick position
+            DrawTriggerLine(i);
+        }
+        else if (std_score_val < RSRS_SELL_THRESHOLD)
+        {
+            // RSRS std_score less than sell threshold, show green arrow
+            ShowArrow(i, "H1级", clrGreen, SYMBOL_ARROWDOWN);
+            // Draw a thick line at the triggering tick position
+            DrawTriggerLine(i);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Slope Strategy                                                   |
+//+------------------------------------------------------------------+
+void Slope_Strategy()
+{
+    for (int period = PERIOD_H1; period <= PERIOD_D1; period *= 4)
+    {
+        int limit = Bars - iBars(_Symbol, period);
+
+        // Calculate fast and slow moving averages
+        double fast_ma[];
+        double slow_ma[];
+        ArraySetAsSeries(fast_ma, true);
+        ArraySetAsSeries(slow_ma, true);
+
+        for (int i = 0; i < limit; i++)
+        {
+            fast_ma[i] = iMA(_Symbol, period, SLOPE_FAST_MA_PERIOD, 0, MODE_SMA, PRICE_CLOSE, i);
+            slow_ma[i] = iMA(_Symbol, period, SLOPE_SLOW_MA_PERIOD, 0, 1, PRICE_CLOSE, i); // Use 1 instead of MODE_WMA
+        }
+
+        // Calculate Slope
+        double slope[];
+        ArraySetAsSeries(slope, true);
+
+        for (int i = 1; i < limit; i++)
+        {
+            slope[i] = fast_ma[i] - fast_ma[i - 1];
+        }
+
+        // Display arrows based on Slope signals
+        for (int i = 1; i < limit; i++)
+        {
+            // When Slope goes from 0 to positive, show orange arrow
+            if (slope[i - 1] == 0 && slope[i] > 0)
+            {
+                ShowArrow(i, PeriodToString(period) + "级", clrOrange, SYMBOL_ARROWUP);
+                // Draw a thick line at the triggering tick position
+                DrawTriggerLine(i);
+            }
+            // When Slope goes from 0 to negative, show blue arrow
+            else if (slope[i - 1] == 0 && slope[i] < 0)
+            {
+                ShowArrow(i, PeriodToString(period) + "级", clrBlue, SYMBOL_ARROWDOWN);
+                // Draw a thick line at the triggering tick position
+                DrawTriggerLine(i);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Display arrow on the chart                                       |
+//+------------------------------------------------------------------+
+void ShowArrow(int index, string label, color arrowColor, int arrowType)
+{
+    double arrowPrice = iHigh(_Symbol, _Period, index) + (iATR(_Symbol, _Period, 14, index) * ARROW_OFFSET_FACTOR);
+    string arrowObjectName = "Arrow_" + index;
+
+    if (ObjectCreate(ChartID(), arrowObjectName, OBJ_ARROW_THUMB_UP, 0, iTime(_Symbol, _Period, index), arrowPrice))
+    {
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_COLOR, arrowColor);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_ARROWCODE, arrowType);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_SELECTED, false);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_RAY_RIGHT, false);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_RAY_LEFT, false);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_COLOR, arrowColor);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_WIDTH, 2);
+        ObjectSetInteger(ChartID(), arrowObjectName, OBJPROP_STYLE, STYLE_SOLID);
+        ObjectSetString(ChartID(), arrowObjectName, OBJPROP_TEXT, label);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw thick line at the triggering tick position                |
+//+------------------------------------------------------------------+
+void DrawTriggerLine(int index)
+{
+    datetime lineTime = iTime(_Symbol, _Period, index);
+    double lineHeight = iClose(_Symbol, _Period, index);
+    string lineObjectName = "TriggerLine_" + index;
+
+    if (ObjectCreate(0, lineObjectName, OBJ_TREND, 0, lineTime, lineHeight, lineTime, lineHeight))
+    {
+        ObjectSetInteger(0, lineObjectName, OBJPROP_COLOR, LINE_COLOR);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_SELECTED, false);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_RAY_RIGHT, false);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_RAY_LEFT, false);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_COLOR, LINE_COLOR);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_WIDTH, LINE_WIDTH);
+        ObjectSetInteger(0, lineObjectName, OBJPROP_STYLE, STYLE_SOLID);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    RSRS_Strategy();
+    Slope_Strategy();
+}
