@@ -87,14 +87,20 @@ void RSRS_Strategy()
         // Fill x and y arrays with historical low and high prices
         for (int j = i - window; j <= i; j++)
         {
-            x[j - (i - window)] = iLow(_Symbol, _Period, j);
-            y[j - (i - window)] = iHigh(_Symbol, _Period, j);
+            int index = j - (i - window);
+    
+            // 检查索引是否越界
+            if (index >= 0 && index < ArraySize(x))
+            {
+                x[index] = iLow(_Symbol, _Period, j);
+                y[index] = iHigh(_Symbol, _Period, j);
+            }
+            else
+            {
+                Print("Invalid index: ", index);
+               // 执行其他错误处理的逻辑
+            }
         }
-
-        // Calculate beta using rolling linear regression
-        double beta_val = calculate_beta(x, y, window);
-        beta[i] = beta_val;
-    }
 
     // Calculate standard score
     double std_score[];
